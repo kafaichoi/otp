@@ -1132,8 +1132,8 @@ chunk_to_data(abstract_code=Id, Chunk, File, _Cs, AtomTable, Mod) ->
                     end
 	    end
     end;
-chunk_to_data(atoms=Id, _Chunk, _File, Cs, AtomTable0, _Mod) ->
-    AtomTable = ensure_atoms(AtomTable0, Cs),
+chunk_to_data(atoms=Id, _Chunk, File, Cs, AtomTable0, _Mod) ->
+    AtomTable = ensure_atoms(AtomTable0, Cs, File),
     Atoms = ets:tab2list(AtomTable),
     {AtomTable, {Id, lists:sort(Atoms)}};
 chunk_to_data(literals=Id, Chunk, File, _Cs, AtomTable, _Mod) ->
@@ -1146,9 +1146,11 @@ chunk_to_data(literals=Id, Chunk, File, _Cs, AtomTable, _Mod) ->
     end;
 chunk_to_data(ChunkName, Chunk, File,
 	      Cs, AtomTable, _Mod) when is_atom(ChunkName) ->
-    case catch symbols(Chunk, AtomTable, Cs, ChunkName) of
+    case catch symbols(Chunk, AtomTable, Cs, ChunkName, File) of
 	{ok, NewAtomTable, S} ->
 	    {NewAtomTable, {ChunkName, S}};
+        {error, ?MODULE, _} = Error ->
+            throw(Error);
 	{'EXIT', _} ->
 	    error({invalid_chunk, File, chunk_name_to_id(ChunkName, File)})
     end;
@@ -1186,8 +1188,8 @@ attributes(L, R) ->
 
 %% Extract symbols
 
-symbols(<<_Num:32, B/binary>>, AT0, Cs, Name) ->
-    AT = ensure_atoms(AT0, Cs),
+symbols(<<_Num:32, B/binary>>, AT0, Cs, Name, File) ->
+    AT = ensure_atoms(AT0, Cs, File),
     symbols1(B, AT, Name, [], 1).
 
 symbols1(<<I1:32, I2:32, I3:32, B/binary>>, AT, Name, S, Cnt) ->
@@ -1211,16 +1213,22 @@ atm(AT, N) ->
     ets:lookup_element(AT, N, 2).
 
 %% AT is updated.
-ensure_atoms({empty, AT}, Cs) ->
-    case lists:keyfind("AtU8", 1, Cs) of
-	{_Id, AtomChunk} when is_binary(AtomChunk) ->
-	    extract_atoms(AtomChunk, AT, utf8);
-	_ ->
-	    {_Id, AtomChunk} = lists:keyfind("Atom", 1, Cs),
-	    extract_atoms(AtomChunk, AT, latin1)
+ensure_atoms({empty, AT}, Cs, File) ->
+    {Id, AtomChunk, Encoding} =
+        case lists:keyfind("AtU8", 1, Cs) of
+            {Id0, Chunk} when is_binary(Chunk) ->
+                {Id0, Chunk, utf8};
+            _ ->
+                {Id0, Chunk} = lists:keyfind("Atom", 1, Cs),
+                {Id0, Chunk, latin1}
+        end,
+    try extract_atoms(AtomChunk, AT, Encoding)
+    catch
+        error:_ ->
+            error({invalid_chunk, File, Id})
     end,
     AT;
-ensure_atoms(AT, _Cs) ->
+ensure_atoms(AT, _Cs, _File) ->
     AT.
 
 extract_module(<<Num:32/signed-integer, B/binary>>, utf8) when Num < 0 ->

@@ -38,7 +38,8 @@
 	 init_per_group/2,end_per_group/2, 
 	 normal/1, error/1, cmp/1, cmp_literals/1, strip/1, strip_add_chunks/1, otp_6711/1,
          building/1, md5/1, encrypted_abstr/1, encrypted_abstr_file/1,
-         missing_debug_info_backend/1, literals/1, invalid_atom_chunk/1
+         missing_debug_info_backend/1, literals/1, invalid_atom_chunk/1,
+         invalid_atom_table/1
         ]).
 -export([test_makedep_abstract_code/1]).
 
@@ -52,7 +53,7 @@ all() ->
     [error, normal, cmp, cmp_literals, strip, strip_add_chunks, otp_6711,
      building, md5, encrypted_abstr, encrypted_abstr_file,
      missing_debug_info_backend, test_makedep_abstract_code,
-     literals, invalid_atom_chunk
+     literals, invalid_atom_chunk, invalid_atom_table
     ].
 
 groups() -> 
@@ -310,6 +311,46 @@ invalid_atom_chunk(Beam, Id) ->
     Error = beam_lib:chunks(Beam, [atoms], []),
     Error = beam_lib:chunks(Beam, [atoms], [allow_missing_chunks]),
     Error = beam_lib:md5(Beam),
+    ok.
+
+%% The module name is valid, but a later atom cannot be decoded.
+invalid_atom_table(Conf) when is_list(Conf) ->
+    BeamFile = filename:join(?privdir, "invalid_atom_table.beam"),
+    {ok, a, Beam0} = compile:forms([{attribute, 1, module, a}], [binary]),
+    {ok, a, Chunks0} = beam_lib:all_chunks(Beam0),
+    Chunks = lists:keydelete("Atom", 1, lists:keydelete("AtU8", 1, Chunks0)),
+    InvalidChunks =
+        [{"Atom", <<2:32, 1, $a, 2, $b>>},
+         {"AtU8", <<2:32, 1, $a, 2, $b>>},
+         {"AtU8", <<2:32, 1, $a, 1, 16#ff>>},
+         {"AtU8", <<-2:32, 16#10, $a, 16#08>>},
+         {"AtU8", <<-2:32, 16#10, $a, 16#18>>},
+         {"AtU8", <<-2:32, 16#10, $a, 16#20, $b>>},
+         {"AtU8", <<-2:32, 16#10, $a, 16#08, 16#10, $b>>},
+         {"AtU8", <<-2:32, 16#10, $a, 16#10, 16#ff>>}],
+    NoOfTables = erlang:system_info(ets_count),
+    lists:foreach(
+      fun({Id, Chunk}) ->
+              {ok, Beam} = beam_lib:build_module([{Id, Chunk} | Chunks]),
+              invalid_atom_table(Beam, Id, Chunk),
+              ok = file:write_file(BeamFile, Beam),
+              invalid_atom_table(BeamFile, Id, Chunk)
+      end, InvalidChunks),
+    NoOfTables = erlang:system_info(ets_count),
+    ok = file:delete(BeamFile).
+
+invalid_atom_table(Beam, Id, Chunk) ->
+    Error = {error, beam_lib, {invalid_chunk, Beam, Id}},
+    lists:foreach(
+      fun(Name) ->
+              Error = beam_lib:chunks(Beam, [Name]),
+              Error = beam_lib:chunks(Beam, [Name], []),
+              Error = beam_lib:chunks(Beam, [Name], [allow_missing_chunks])
+      end, [atoms, imports, indexed_imports, exports, labeled_exports,
+            locals, labeled_locals]),
+    %% Raw chunks and checksums do not require decoding the remaining atoms.
+    {ok, {a, [{Id, Chunk}]}} = beam_lib:chunks(Beam, [Id]),
+    {ok, {a, _MD5}} = beam_lib:md5(Beam),
     ok.
 
 

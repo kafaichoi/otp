@@ -986,7 +986,11 @@ scan_beam(FD, Pos, What, Mod, Data) ->
 get_atom_data(Cs, Id, FD, Size, Pos, Pos2, Data, Encoding) ->
     NewCs = del_chunk(Id, Cs),
     {NFD, Chunk} = get_chunk(Id, Pos, Size, FD),
-    Module = extract_module(Chunk, Encoding),
+    Module = try extract_module(Chunk, Encoding)
+             catch
+                 error:_ ->
+                     error({invalid_chunk, filename(FD), Id})
+             end,
     C = case Cs of
 	    info -> 
 		{Id, Pos, Size};

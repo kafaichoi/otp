@@ -38,7 +38,7 @@
 	 init_per_group/2,end_per_group/2, 
 	 normal/1, error/1, cmp/1, cmp_literals/1, strip/1, strip_add_chunks/1, otp_6711/1,
          building/1, md5/1, encrypted_abstr/1, encrypted_abstr_file/1,
-         missing_debug_info_backend/1, literals/1
+         missing_debug_info_backend/1, literals/1, invalid_atom_chunk/1
         ]).
 -export([test_makedep_abstract_code/1]).
 
@@ -52,7 +52,7 @@ all() ->
     [error, normal, cmp, cmp_literals, strip, strip_add_chunks, otp_6711,
      building, md5, encrypted_abstr, encrypted_abstr_file,
      missing_debug_info_backend, test_makedep_abstract_code,
-     literals
+     literals, invalid_atom_chunk
     ].
 
 groups() -> 
@@ -278,6 +278,39 @@ do_error(BeamFile, ACopy) ->
 
     BF9 = set_byte(ACopy, BeamFile, CompileInfoStart+8, 17),
     verify(invalid_chunk, beam_lib:chunks(BF9, [compile_info])).
+
+
+%% Malformed module names must produce errors, not exceptions.
+invalid_atom_chunk(Conf) when is_list(Conf) ->
+    BeamFile = filename:join(?privdir, "invalid_atoms.beam"),
+    %% Latin-1 and the original UTF-8 format use one-byte atom lengths.
+    ShortChunks = [<<>>, <<1:24>>, <<1:32>>, <<1:32, 2, $a>>],
+    InvalidChunks = [{Id, Chunk} || Id <- ["Atom", "AtU8"],
+                                   Chunk <- ShortChunks] ++
+        [{"AtU8", <<1:32, 1, 16#ff>>},
+         %% The current UTF-8 format uses compact lengths and a negative count.
+         {"AtU8", <<-1:32>>},
+         {"AtU8", <<-1:32, 16#08>>},
+         {"AtU8", <<-1:32, 16#18>>},
+         {"AtU8", <<-1:32, 16#20, $a>>},
+         {"AtU8", <<-1:32, 16#08, 16#10, $a>>},
+         {"AtU8", <<-1:32, 16#10, 16#ff>>}],
+    lists:foreach(
+      fun({Id, Chunk}) ->
+              {ok, Beam} = beam_lib:build_module([{Id, Chunk}]),
+              invalid_atom_chunk(Beam, Id),
+              ok = file:write_file(BeamFile, Beam),
+              invalid_atom_chunk(BeamFile, Id)
+      end, InvalidChunks),
+    ok = file:delete(BeamFile).
+
+invalid_atom_chunk(Beam, Id) ->
+    Error = {error, beam_lib, {invalid_chunk, Beam, Id}},
+    Error = beam_lib:chunks(Beam, [atoms]),
+    Error = beam_lib:chunks(Beam, [atoms], []),
+    Error = beam_lib:chunks(Beam, [atoms], [allow_missing_chunks]),
+    Error = beam_lib:md5(Beam),
+    ok.
 
 
 %% Compare contents of BEAM files and directories.

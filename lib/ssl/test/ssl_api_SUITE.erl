@@ -4043,6 +4043,17 @@ format_error(Config) when is_list(Config) ->
                     Str = [C || C <- Str, is_integer(C)]
             end,
     [Check(Err) || Err <- Errors],
+    ExpectedErrors = [{enotconn, inet:format_error(enotconn)},
+                      {"already formatted", "already formatted"},
+                      {unknown_error, "Unexpected error: unknown_error"},
+                      {{a, b}, "Unexpected error: {a,b}"},
+                      {42, "Unexpected error: 42"},
+                      {<<"error">>, "Unexpected error: <<\"error\">>"},
+                      {#{}, "Unexpected error: #{}"}],
+    [begin
+         Expected = ssl:format_error(Reason),
+         Expected = ssl:format_error({error, Reason})
+     end || {Reason, Expected} <- ExpectedErrors],
     ok.
 
 %%--------------------------------------------------------------------
